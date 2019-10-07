@@ -36,15 +36,26 @@ def generate_cli() -> argparse.ArgumentParser:
 
     Returns: argparse.ArgumentParser object representing the lambada CLI
     """
+    description = """
+lambada: Manage AWS Lambdas using Simiotics Function Registries
+\n
+Note: This tool uses the SIMIOTICS_FUNCTION_REGISTRY environment variable to determine the Function
+Registry to communicate with. If the variable is not set, it will error out. You can use the public
+Simiotics Function Registry by running:
+```
+$ export SIMIOTICS_FUNCTION_REGISTRY=registry-alpha.simiotics.com:7011
+```
+    """
     parser = argparse.ArgumentParser(
-        description='lambada: AWS Lambda management via Simiotics Function Registries'
+        description=description,
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
 
     subparsers = parser.add_subparsers(title='Commands')
 
     register = subparsers.add_parser(
         'register',
-        help='Register a new Lambda function against a Simiotics Function Registry',
+        help='Register a lambada function against a Simiotics Function Registry and print its key',
     )
     register.add_argument(
         '--runtime',
@@ -88,6 +99,12 @@ def generate_cli() -> argparse.ArgumentParser:
         ),
     )
     register.add_argument(
+        '--timeout',
+        type=int,
+        default=3,
+        help='Timeout for execution of Lambda in seconds (default: 3)',
+    )
+    register.add_argument(
         '--overwrite',
         action='store_true',
         help='If a function has already been registered under the given key, overwrite it',
@@ -98,13 +115,12 @@ def generate_cli() -> argparse.ArgumentParser:
         'create_role',
         help=(
             'Create IAM role to be assumed by AWS Lambda deployment of function from Simiotics '
-            'Function Registry'
+            'Function Registry and print its name'
         )
     )
     create_role.add_argument(
         '-k',
-        '--key',
-        type=str,
+        '--key', type=str,
         required=True,
         help='Key of function in Simiotics Function Registry for which to create IAM role',
     )
@@ -115,6 +131,31 @@ def generate_cli() -> argparse.ArgumentParser:
         help='Name for IAM role',
     )
     create_role.set_defaults(func=handlers.create_role)
+
+    deploy = subparsers.add_parser(
+        'deploy',
+        help='Deploy a Simiotics Function as an AWS Lambda and print its AWS Lambda ARN',
+    )
+    deploy.add_argument(
+        '-n',
+        '--name',
+        type=str,
+        default=None,
+        help='Name of the AWS Lambda to deploy',
+    )
+    deploy.add_argument(
+        '-k',
+        '--key',
+        type=str,
+        required=True,
+        help='Key for function in Simiotics Function Registry',
+    )
+    deploy.add_argument(
+        '--keep-staging-dir',
+        action='store_true',
+        help='If set, keeps the deployment package temporary directory. Path is printed to stderr.'
+    )
+    deploy.set_defaults(func=handlers.deploy)
 
     return parser
 

@@ -3,9 +3,14 @@ Handlers for lambada commands
 """
 
 import argparse
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
 
 import boto3
-from simiotics.client import client_from_env, Simiotics
+from simiotics.client import client_from_env
 
 AWSLambdaTrustedEntity = """
 {
@@ -43,6 +48,7 @@ def register(args: argparse.Namespace) -> None:
         'handler': args.handler,
         'requirements': args.requirements,
         'iam_policy': args.iam_policy,
+        'timeout': str(args.timeout),
     }
 
     simiotics.register_function(args.key, args.code, tags, args.overwrite)
@@ -73,6 +79,7 @@ def create_role(args: argparse.Namespace) -> None:
     )
 
     role_name = response['Role']['RoleName']
+    role_arn = response['Role']['Arn']
 
     simiotics = client_from_env()
     registered_function = simiotics.get_registered_function(args.key)
@@ -85,6 +92,7 @@ def create_role(args: argparse.Namespace) -> None:
 
     tags = registered_function.tags
     tags['iam_role_name'] = role_name
+    tags['iam_role_arn'] = role_arn
     simiotics.register_function(
         key=registered_function.key,
         code=registered_function.code,
@@ -93,3 +101,70 @@ def create_role(args: argparse.Namespace) -> None:
     )
 
     print(role_name)
+
+def deploy(args: argparse.Namespace) -> None:
+    """
+    Handler for `lambada deploy`, which creates an AWS Lambda from a Simiotics function
+
+    Args:
+    args
+        `argparse.Namespace` object containing parameters to the `deploy` command
+
+    Returns: None, prints AWS Lambda ARN
+    """
+    simiotics = client_from_env()
+    registered_function = simiotics.get_registered_function(args.key)
+
+    staging_dir = tempfile.mkdtemp()
+    try:
+        deployment_package_dir = os.path.join(staging_dir, 'deployment_package')
+        os.mkdir(deployment_package_dir)
+        requirements_txt = os.path.join(staging_dir, 'requirements.txt')
+        code_py = os.path.join(deployment_package_dir, 'code.py')
+
+        with open(requirements_txt, 'w') as ofp:
+            ofp.write(registered_function.tags['requirements'])
+
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-r",
+                requirements_txt,
+                "--target",
+                deployment_package_dir
+            ],
+            check=True,
+        )
+        if os.path.exists(code_py):
+            raise ValueError('File already exists at path: {}'.format(code_py))
+
+        with open(code_py, 'w') as ofp:
+            ofp.write(registered_function.code)
+
+        zipfilepath = os.path.join(staging_dir, 'function.zip')
+        shutil.make_archive(os.path.splitext(zipfilepath)[0], 'zip', deployment_package_dir)
+        with open(zipfilepath, 'rb') as ifp:
+            deployment_package = ifp.read()
+
+        lambda_client = boto3.client('lambda')
+        lambda_resource = lambda_client.create_function(
+            FunctionName=args.name,
+            Runtime=registered_function.tags['runtime'],
+            Role=registered_function.tags['iam_role_arn'],
+            Handler=registered_function.tags['handler'],
+            Code={'ZipFile': deployment_package},
+            Description='Simiotics lambada deployment of: {}'.format(args.key),
+            Timeout=int(registered_function.tags['timeout']),
+            Tags={
+                'Creator': 'simiotics',
+            },
+        )
+        print(lambda_resource['FunctionArn'])
+    finally:
+        if not args.keep_staging_dir:
+            shutil.rmtree(staging_dir)
+        else:
+            print(staging_dir, file=sys.stderr)

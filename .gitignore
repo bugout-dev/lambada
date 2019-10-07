@@ -106,3 +106,4 @@ venv.bak/
 .lambada/
 .test/
 .vscode/
+.demo/

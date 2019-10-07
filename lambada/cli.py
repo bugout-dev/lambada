@@ -175,6 +175,18 @@ $ export SIMIOTICS_FUNCTION_REGISTRY=registry-alpha.simiotics.com:7011
     )
     down.set_defaults(func=handlers.down)
 
+    list_functions = subparsers.add_parser(
+        'list',
+        help='List functions in the Simiotics Function Registry managed by lambada',
+    )
+    list_functions.add_argument(
+        '--num-items',
+        type=int,
+        default=100,
+        help='Number of registry functions that should be processed at a time (default: 100).'
+    )
+    list_functions.set_defaults(func=handlers.list_functions)
+
     return parser
 
 def main() -> None:

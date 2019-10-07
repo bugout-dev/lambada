@@ -206,30 +206,58 @@ def down(args: argparse.Namespace) -> None:
     if registered_function.tags.get(LambadaManagerKey) != LambadaManager:
         raise ValueError('Simiotics function with key={} not managed by lambada'.format(args.key))
 
-    lambda_arn = registered_function.tags.get('lambda_arn')
-    if lambda_arn is not None:
-        lambda_client = boto3.client('lambda')
-        lambda_client.delete_function(FunctionName=lambda_arn)
-        registered_function.tags.pop('lambda_arn')
+    try:
+        lambda_arn = registered_function.tags.get('lambda_arn')
+        if lambda_arn is not None:
+            lambda_client = boto3.client('lambda')
+            lambda_client.delete_function(FunctionName=lambda_arn)
+            registered_function.tags.pop('lambda_arn')
 
-    if args.teardown:
-        iam_client = boto3.client('iam')
-        role_name = registered_function.get('iam_role_name')
-        if role_name is not None:
-            policy_name = registered_function.tags.get('iam_role_policy')
-            if policy_name is not None:
-                iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
-                registered_function.tags.pop('iam_role_policy')
+        if args.teardown:
+            iam_client = boto3.client('iam')
+            role_name = registered_function.tags.get('iam_role_name')
+            if role_name is not None:
+                policy_name = registered_function.tags.get('iam_role_policy')
+                if policy_name is not None:
+                    iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+                    registered_function.tags.pop('iam_role_policy')
 
-            iam_client.delete_role(RoleName=role_name)
-            registered_function.tags.pop('iam_role_name')
-            registered_function.tags.pop('iam_role_arn')
-
-    simiotics.register_function(
-        key=registered_function.key,
-        code=registered_function.code,
-        tags=registered_function.tags,
-        overwrite=True,
-    )
+                iam_client.delete_role(RoleName=role_name)
+                registered_function.tags.pop('iam_role_name')
+                registered_function.tags.pop('iam_role_arn')
+    finally:
+        simiotics.register_function(
+            key=registered_function.key,
+            code=registered_function.code,
+            tags=registered_function.tags,
+            overwrite=True,
+        )
 
     print(args.key)
+
+def list_functions(args: argparse.Namespace) -> None:
+    """
+    Handler for `lambada list`, which lists all the functions in a Simiotics Function Registry which
+    are managed by lambada. The function registry for which functions are listed is the one
+    specified by the SIMIOTICS_FUNCTION_REGISTRY environment variable.
+
+    Args:
+    args
+        `argparse.Namespace` object containing parameters to the `list` command
+
+    Returns: None, prints lambada-managed functions in the Simiotics Function Registry line by line
+    """
+    simiotics = client_from_env()
+
+    proceed = True
+    current_offset = 0
+    while proceed:
+        registered_functions = simiotics.list_registered_functions(current_offset, args.num_items)
+        for registered_function in registered_functions:
+            if registered_function.tags.get(LambadaManagerKey) == LambadaManager:
+                print(registered_function.key)
+
+        if len(registered_functions) < args.num_items:
+            proceed = False
+
+        current_offset += len(registered_functions)

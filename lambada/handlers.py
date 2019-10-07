@@ -30,6 +30,9 @@ AWSLambdaTrustedEntity = """
 
 SimioticsPath = '/simiotics/'
 
+LambadaManagerKey = 'manager'
+LambadaManager = 'lambada'
+
 def register(args: argparse.Namespace) -> None:
     """
     Handler for `lambada register`, which registers a new lambada function against a simiotics
@@ -49,6 +52,7 @@ def register(args: argparse.Namespace) -> None:
         'requirements': args.requirements,
         'iam_policy': args.iam_policy,
         'timeout': str(args.timeout),
+        LambadaManagerKey: LambadaManager,
     }
 
     simiotics.register_function(args.key, args.code, tags, args.overwrite)
@@ -66,6 +70,11 @@ def create_role(args: argparse.Namespace) -> None:
 
     Returns: None, prints IAM role name
     """
+    simiotics = client_from_env()
+    registered_function = simiotics.get_registered_function(args.key)
+    if registered_function.tags.get(LambadaManagerKey) != LambadaManager:
+        raise ValueError('Simiotics function with key={} not managed by lambada'.format(args.key))
+
     iam_client = boto3.client('iam')
 
     response = iam_client.create_role(
@@ -81,18 +90,18 @@ def create_role(args: argparse.Namespace) -> None:
     role_name = response['Role']['RoleName']
     role_arn = response['Role']['Arn']
 
-    simiotics = client_from_env()
-    registered_function = simiotics.get_registered_function(args.key)
     iam_policy = registered_function.tags['iam_policy']
+    policy_name = 'lambada_policy_{}'.format(role_name)
     iam_client.put_role_policy(
         RoleName=role_name,
-        PolicyName='{}Policy'.format(role_name),
+        PolicyName=policy_name,
         PolicyDocument=iam_policy,
     )
 
     tags = registered_function.tags
     tags['iam_role_name'] = role_name
     tags['iam_role_arn'] = role_arn
+    tags['iam_role_policy'] = policy_name
     simiotics.register_function(
         key=registered_function.key,
         code=registered_function.code,
@@ -114,6 +123,8 @@ def deploy(args: argparse.Namespace) -> None:
     """
     simiotics = client_from_env()
     registered_function = simiotics.get_registered_function(args.key)
+    if registered_function.tags.get(LambadaManagerKey) != LambadaManager:
+        raise ValueError('Simiotics function with key={} not managed by lambada'.format(args.key))
 
     staging_dir = tempfile.mkdtemp()
     try:
@@ -150,11 +161,12 @@ def deploy(args: argparse.Namespace) -> None:
             deployment_package = ifp.read()
 
         lambda_client = boto3.client('lambda')
+        handler_path = 'code.{}'.format(registered_function.tags['handler'])
         lambda_resource = lambda_client.create_function(
             FunctionName=args.name,
             Runtime=registered_function.tags['runtime'],
             Role=registered_function.tags['iam_role_arn'],
-            Handler=registered_function.tags['handler'],
+            Handler=handler_path,
             Code={'ZipFile': deployment_package},
             Description='Simiotics lambada deployment of: {}'.format(args.key),
             Timeout=int(registered_function.tags['timeout']),
@@ -162,9 +174,62 @@ def deploy(args: argparse.Namespace) -> None:
                 'Creator': 'simiotics',
             },
         )
-        print(lambda_resource['FunctionArn'])
+
+        lambda_arn = lambda_resource['FunctionArn']
+
+        registered_function.tags['lambda_arn'] = lambda_arn
+        simiotics.register_function(
+            key=registered_function.key,
+            code=registered_function.code,
+            tags=registered_function.tags,
+            overwrite=True,
+        )
+        print(lambda_arn)
     finally:
         if not args.keep_staging_dir:
             shutil.rmtree(staging_dir)
         else:
             print(staging_dir, file=sys.stderr)
+
+def down(args: argparse.Namespace) -> None:
+    """
+    Handler for `lambada down`, which takes down an AWS Lambda from a Simiotics function
+
+    Args:
+    args
+        `argparse.Namespace` object containing parameters to the `down` command
+
+    Returns: None, prints Simiotics Function Registry key
+    """
+    simiotics = client_from_env()
+    registered_function = simiotics.get_registered_function(args.key)
+    if registered_function.tags.get(LambadaManagerKey) != LambadaManager:
+        raise ValueError('Simiotics function with key={} not managed by lambada'.format(args.key))
+
+    lambda_arn = registered_function.tags.get('lambda_arn')
+    if lambda_arn is not None:
+        lambda_client = boto3.client('lambda')
+        lambda_client.delete_function(FunctionName=lambda_arn)
+        registered_function.tags.pop('lambda_arn')
+
+    if args.teardown:
+        iam_client = boto3.client('iam')
+        role_name = registered_function.get('iam_role_name')
+        if role_name is not None:
+            policy_name = registered_function.tags.get('iam_role_policy')
+            if policy_name is not None:
+                iam_client.delete_role_policy(RoleName=role_name, PolicyName=policy_name)
+                registered_function.tags.pop('iam_role_policy')
+
+            iam_client.delete_role(RoleName=role_name)
+            registered_function.tags.pop('iam_role_name')
+            registered_function.tags.pop('iam_role_arn')
+
+    simiotics.register_function(
+        key=registered_function.key,
+        code=registered_function.code,
+        tags=registered_function.tags,
+        overwrite=True,
+    )
+
+    print(args.key)

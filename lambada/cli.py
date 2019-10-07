@@ -157,6 +157,24 @@ $ export SIMIOTICS_FUNCTION_REGISTRY=registry-alpha.simiotics.com:7011
     )
     deploy.set_defaults(func=handlers.deploy)
 
+    down = subparsers.add_parser(
+        'down',
+        help='Take down an AWS Lambda deployed via lambada',
+    )
+    down.add_argument(
+        '-k',
+        '--key',
+        type=str,
+        required=True,
+        help='Key for function in Simiotics Function Registry',
+    )
+    down.add_argument(
+        '--teardown',
+        action='store_true',
+        help='All AWS resources associated with the Simiotics function should be removed'
+    )
+    down.set_defaults(func=handlers.down)
+
     return parser
 
 def main() -> None:

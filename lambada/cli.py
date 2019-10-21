@@ -3,6 +3,7 @@ Lambada command-line interface
 """
 
 import argparse
+import json
 import os
 from typing import Any, Callable
 
@@ -10,6 +11,22 @@ from simiotics.cli import read_string_from_file
 from simiotics.client import client_from_env, Simiotics
 
 from . import handlers
+
+def parse_env(environment_string: str) -> str:
+    """
+    Parses an environment string as passed from the command line and ensures that it is a JSON
+    object with the appropriate structure (i.e. a map of strings to strings)
+
+    Args:
+    environment_string
+        JSON string denoting a mapping of environment variable names to string values
+
+    Returns: JSON string which maps stringified keys to stringified values from the original
+    environment string - `str` is used for stringification.
+    """
+    raw_env = json.loads(environment_string)
+    env = {str(key): str(value) for key, value in raw_env.items()}
+    return json.dumps(env)
 
 LambdaBasicExecutionRolePolicy = """
 {
@@ -88,6 +105,16 @@ $ export SIMIOTICS_FUNCTION_REGISTRY=registry-alpha.simiotics.com:7011
         type=read_string_from_file,
         default='',
         help='Path to file specifying requirements for the function (optional)',
+    )
+    register.add_argument(
+        '-e',
+        '--env',
+        type=parse_env,
+        default='{}',
+        help=(
+            'JSON object with string keys representing names of environment variables and string '
+            'values representing their values'
+        ),
     )
     register.add_argument(
         '--iam-policy',

@@ -3,11 +3,14 @@ Handlers for lambada commands
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+
+from typing import Dict
 
 import boto3
 from simiotics.client import client_from_env
@@ -52,6 +55,7 @@ def register(args: argparse.Namespace) -> None:
         'requirements': args.requirements,
         'iam_policy': args.iam_policy,
         'timeout': str(args.timeout),
+        'env': args.env,
         LambadaManagerKey: LambadaManager,
     }
 
@@ -126,6 +130,8 @@ def deploy(args: argparse.Namespace) -> None:
     if registered_function.tags.get(LambadaManagerKey) != LambadaManager:
         raise ValueError('Simiotics function with key={} not managed by lambada'.format(args.key))
 
+    environment_variables: Dict[str, str] = json.loads(registered_function.tags.get('env', '{}'))
+
     staging_dir = tempfile.mkdtemp()
     try:
         deployment_package_dir = os.path.join(staging_dir, 'deployment_package')
@@ -168,6 +174,9 @@ def deploy(args: argparse.Namespace) -> None:
             Role=registered_function.tags['iam_role_arn'],
             Handler=handler_path,
             Code={'ZipFile': deployment_package},
+            Environment={
+                'Variables': environment_variables,
+            },
             Description='Simiotics lambada deployment of: {}'.format(args.key),
             Timeout=int(registered_function.tags['timeout']),
             Tags={

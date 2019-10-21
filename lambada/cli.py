@@ -28,23 +28,6 @@ def parse_env(environment_string: str) -> str:
     env = {str(key): str(value) for key, value in raw_env.items()}
     return json.dumps(env)
 
-LambdaBasicExecutionRolePolicy = """
-{
-    "Version": "2012-10-17",
-    "Statement": [
-        {
-            "Effect": "Allow",
-            "Action": [
-                "logs:CreateLogGroup",
-                "logs:CreateLogStream",
-                "logs:PutLogEvents"
-            ],
-            "Resource": "*"
-        }
-    ]
-}
-""".strip()
-
 def generate_cli() -> argparse.ArgumentParser:
     """
     Generates the lambada CLI
@@ -117,13 +100,16 @@ $ export SIMIOTICS_FUNCTION_REGISTRY=registry-alpha.simiotics.com:7011
         ),
     )
     register.add_argument(
-        '--iam-policy',
-        type=str,
-        default=LambdaBasicExecutionRolePolicy,
+        '--s3',
+        type=json.loads,
+        default=None,
         help=(
-            'IAM policy that should be granted to an AWS Lambda running the given function '
-            '(default: allows Lambda to log usage in CloudWatch)'
-        ),
+            'JSON *array* of items of the form: '
+            '`{"bucket": <BUCKET>, "prefix": <PREFIX>, "suffix": <SUFFIX>}`. These items represent '
+            'the name of a bucket for which the lambda should trigger on object creation events, '
+            'the prefixes of keys for which the lambda should trigger, and the suffixes of keys '
+            'on which the lambda should trigger'
+        )
     )
     register.add_argument(
         '--timeout',

@@ -1,4 +1,6 @@
-def hello(event, context):
-    target = event['target']
-    return {'greeting': 'Hello, {}!'.format(target)}
+import os
 
+def hello(event, context):
+    greeting = os.environ.get('GREETING', 'Hello')
+    target = event['target']
+    return {'greeting': '{}, {}!'.format(greeting, target)}

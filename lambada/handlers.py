@@ -3,6 +3,7 @@ Handlers for lambada commands
 """
 
 import argparse
+import copy
 import json
 import os
 import shutil
@@ -15,8 +16,22 @@ from typing import Dict
 import boto3
 from simiotics.client import client_from_env
 
-AWSLambdaTrustedEntity = """
-{
+LambdaExecutionRolePolicyDict = {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "logs:CreateLogGroup",
+                "logs:CreateLogStream",
+                "logs:PutLogEvents"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+
+AWSLambdaTrustedEntityDict = {
     "Version": "2012-10-17",
     "Statement": [
         {
@@ -29,7 +44,7 @@ AWSLambdaTrustedEntity = """
         }
     ]
 }
-""".strip()
+AWSLambdaTrustedEntity = json.dumps(AWSLambdaTrustedEntityDict)
 
 SimioticsPath = '/simiotics/'
 
@@ -49,13 +64,66 @@ def register(args: argparse.Namespace) -> None:
     """
     simiotics = client_from_env()
 
+    execution_role_policy_dict = copy.deepcopy(LambdaExecutionRolePolicyDict)
+
+    s3_buckets = []
+    s3_notification_configurations = []
+    if args.s3 is not None:
+        for s3_spec in args.s3:
+            bucket = s3_spec['bucket']
+            s3_buckets.append(bucket)
+
+            prefix = s3_spec.get('prefix', '')
+            suffix = s3_spec.get('suffix', '')
+            pattern = '{}*{}'.format(prefix, suffix)
+            execution_role_policy_dict['Statement'].append(
+                {
+                    "Effect": "Allow",
+                    "Action": [
+                        "s3:GetObject"
+                    ],
+                    "Resource": [
+                        "arn:aws:s3:::{}/{}".format(bucket, pattern)
+                    ]
+                }
+            )
+
+            filter_rules = []
+            if prefix != '':
+                filter_rules.append({
+                    'Name': 'prefix',
+                    'Value': prefix,
+                })
+            if suffix != '':
+                filter_rules.append({
+                    'Name': 'suffix',
+                    'Value': suffix,
+                })
+            s3_notification_configurations.append(
+                {
+                    'Bucket': bucket,
+                    'LambdaFunctionConfiguration': {
+                        'Events': ['s3:ObjectCreated:*'],
+                        'Filter': {
+                            'Key': {
+                                'FilterRules': filter_rules,
+                            },
+                        },
+                    },
+                }
+            )
+
+    s3_tag = ','.join(s3_buckets)
+
     tags = {
         'runtime': args.runtime,
         'handler': args.handler,
         'requirements': args.requirements,
-        'iam_policy': args.iam_policy,
+        'iam_policy': json.dumps(execution_role_policy_dict),
         'timeout': str(args.timeout),
         'env': args.env,
+        's3': s3_tag,
+        's3_notification_configurations': json.dumps(s3_notification_configurations),
         LambadaManagerKey: LambadaManager,
     }
 
@@ -193,6 +261,44 @@ def deploy(args: argparse.Namespace) -> None:
             tags=registered_function.tags,
             overwrite=True,
         )
+
+        if registered_function.tags['s3'] != '':
+            s3_sid = 's3-trigger-{}'.format(args.name)
+
+            lambda_client.add_permission(
+                Action='lambda:InvokeFunction',
+                FunctionName=lambda_arn,
+                Principal='s3.amazonaws.com',
+                StatementId=s3_sid,
+            )
+
+            registered_function.tags['s3_sid'] = s3_sid
+            simiotics.register_function(
+                key=registered_function.key,
+                code=registered_function.code,
+                tags=registered_function.tags,
+                overwrite=True,
+            )
+
+        s3_notification_configurations_str = registered_function.tags.get(
+            's3_notification_configurations'
+        )
+        if s3_notification_configurations_str is not None:
+            s3_client = boto3.client('s3')
+            s3_notification_configurations = json.loads(s3_notification_configurations_str)
+            for notification_conf in s3_notification_configurations:
+                bucket = notification_conf['Bucket']
+                notification_conf['LambdaFunctionConfiguration']['LambdaFunctionArn'] = lambda_arn
+                conf = {
+                    'LambdaFunctionConfigurations': [
+                        notification_conf['LambdaFunctionConfiguration'],
+                    ],
+                }
+                s3_client.put_bucket_notification_configuration(
+                    Bucket=bucket,
+                    NotificationConfiguration=conf,
+                )
+
         print(lambda_arn)
     finally:
         if not args.keep_staging_dir:
@@ -219,6 +325,13 @@ def down(args: argparse.Namespace) -> None:
         lambda_arn = registered_function.tags.get('lambda_arn')
         if lambda_arn is not None:
             lambda_client = boto3.client('lambda')
+            s3_sid = registered_function.tags.get('s3_sid')
+            if s3_sid is not None:
+                lambda_client.remove_permission(
+                    FunctionName=lambda_arn,
+                    StatementId=s3_sid,
+                )
+
             lambda_client.delete_function(FunctionName=lambda_arn)
             registered_function.tags.pop('lambda_arn')
 
